@@ -20,6 +20,7 @@ import DashboardLayout from "@/components/dashboard-layout"
 import { Badge } from "@/components/ui/badge"
 import { Plus, Pencil, Trash2, Loader2 } from "lucide-react"
 import { getStoredCompanies, addCompany, updateCompany, deleteCompany, type Company } from "@/lib/storage"
+import { isAuthenticated, getUserRole } from "@/lib/cookies"
 
 export default function CompaniesPage() {
   const router = useRouter()
@@ -43,18 +44,19 @@ export default function CompaniesPage() {
   })
 
   useEffect(() => {
-    // In a real app, verify if user is admin
-    const authStatus = localStorage.getItem("isAuthenticated")
-    const userRole = localStorage.getItem("userRole")
-
-    if (authStatus !== "true") {
+    // Check authentication and admin role
+    if (!isAuthenticated()) {
       router.push("/login")
-    } else if (userRole !== "admin") {
-      router.push("/dashboard")
-    } else {
-      setIsAdmin(true)
+      return
     }
 
+    const userRole = getUserRole()
+    if (userRole !== "admin") {
+      router.push("/dashboard")
+      return
+    }
+
+    setIsAdmin(true)
     loadCompanies()
   }, [router])
 
@@ -65,52 +67,81 @@ export default function CompaniesPage() {
       setCompanies(storedCompanies)
     } catch (error) {
       console.error("Error loading companies:", error)
+      setFormError("Failed to load companies. Please refresh the page.")
     } finally {
       setIsLoading(false)
     }
   }
 
-  const validateForm = () => {
-    if (!newCompany.name.trim()) {
+  const resetForm = () => {
+    setNewCompany({
+      name: "",
+      contact_person: "",
+      email: "",
+      phone: "",
+      address: "",
+      price_per_item: 0,
+      status: "active",
+    })
+    setFormError("")
+  }
+
+  const validateForm = (company: typeof newCompany) => {
+    if (!company.name.trim()) {
       setFormError("Company name is required")
       return false
     }
-    if (!newCompany.contact_person.trim()) {
+    if (!company.contact_person.trim()) {
       setFormError("Contact person is required")
       return false
     }
-    if (!newCompany.email.trim()) {
+    if (!company.email.trim()) {
       setFormError("Email is required")
       return false
     }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(company.email)) {
+      setFormError("Please enter a valid email address")
+      return false
+    }
+
+    // Check for duplicate email (excluding current company when editing)
+    const existingCompany = companies.find(
+      (c) => c.email.toLowerCase() === company.email.toLowerCase() && (!editingCompany || c.id !== editingCompany.id),
+    )
+    if (existingCompany) {
+      setFormError("A company with this email already exists")
+      return false
+    }
+
+    if (company.price_per_item < 0) {
+      setFormError("Price per item cannot be negative")
+      return false
+    }
+
     setFormError("")
     return true
   }
 
   const handleAddCompany = async () => {
-    if (!validateForm()) return
+    if (!validateForm(newCompany)) return
 
     setIsSubmitting(true)
     try {
       const result = await addCompany(newCompany)
       if (result) {
         setCompanies([result, ...companies])
-        setNewCompany({
-          name: "",
-          contact_person: "",
-          email: "",
-          phone: "",
-          address: "",
-          price_per_item: 0,
-          status: "active",
-        })
+        resetForm()
         setShowAddDialog(false)
+        console.log("Company added successfully:", result)
       } else {
         setFormError("Failed to add company. Please try again.")
       }
     } catch (error) {
       console.error("Error adding company:", error)
-      setFormError("An error occurred while adding the company.")
+      setFormError("An error occurred while adding the company. Please try again.")
     } finally {
       setIsSubmitting(false)
     }
@@ -118,6 +149,7 @@ export default function CompaniesPage() {
 
   const handleUpdateCompany = async () => {
     if (!editingCompany) return
+    if (!validateForm(editingCompany)) return
 
     setIsSubmitting(true)
     try {
@@ -125,24 +157,31 @@ export default function CompaniesPage() {
       if (result) {
         setCompanies(companies.map((company) => (company.id === editingCompany.id ? result : company)))
         setEditingCompany(null)
+        setFormError("")
+      } else {
+        setFormError("Failed to update company. Please try again.")
       }
     } catch (error) {
       console.error("Error updating company:", error)
+      setFormError("An error occurred while updating the company.")
     } finally {
       setIsSubmitting(false)
     }
   }
 
   const handleDeleteCompany = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this company?")) return
+    if (!confirm("Are you sure you want to delete this company? This action cannot be undone.")) return
 
     try {
       const success = await deleteCompany(id)
       if (success) {
         setCompanies(companies.filter((company) => company.id !== id))
+      } else {
+        alert("Failed to delete company. Please try again.")
       }
     } catch (error) {
       console.error("Error deleting company:", error)
+      alert("An error occurred while deleting the company.")
     }
   }
 
@@ -161,17 +200,20 @@ export default function CompaniesPage() {
   const filteredCompanies = companies.filter(
     (company) =>
       company.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      company.contact_person.toLowerCase().includes(searchTerm.toLowerCase()),
+      company.contact_person.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      company.email.toLowerCase().includes(searchTerm.toLowerCase()),
   )
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="flex items-center gap-2">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <p>Loading companies...</p>
+      <DashboardLayout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <p>Loading companies...</p>
+          </div>
         </div>
-      </div>
+      </DashboardLayout>
     )
   }
 
@@ -188,14 +230,22 @@ export default function CompaniesPage() {
               <CardTitle>Companies</CardTitle>
               <CardDescription>Manage your client companies and their pricing.</CardDescription>
             </div>
-            <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+            <Dialog
+              open={showAddDialog}
+              onOpenChange={(open) => {
+                setShowAddDialog(open)
+                if (!open) {
+                  resetForm()
+                }
+              }}
+            >
               <DialogTrigger asChild>
                 <Button>
                   <Plus className="w-4 h-4 mr-2" />
                   Add Company
                 </Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="max-w-md">
                 <DialogHeader>
                   <DialogTitle>Add New Company</DialogTitle>
                   <DialogDescription>Enter the company details and set their pricing.</DialogDescription>
@@ -212,6 +262,7 @@ export default function CompaniesPage() {
                       id="name"
                       value={newCompany.name}
                       onChange={(e) => setNewCompany({ ...newCompany, name: e.target.value })}
+                      placeholder="Enter company name"
                       required
                     />
                   </div>
@@ -221,6 +272,7 @@ export default function CompaniesPage() {
                       id="contactPerson"
                       value={newCompany.contact_person}
                       onChange={(e) => setNewCompany({ ...newCompany, contact_person: e.target.value })}
+                      placeholder="Enter contact person name"
                       required
                     />
                   </div>
@@ -231,6 +283,7 @@ export default function CompaniesPage() {
                       type="email"
                       value={newCompany.email}
                       onChange={(e) => setNewCompany({ ...newCompany, email: e.target.value })}
+                      placeholder="Enter email address"
                       required
                     />
                   </div>
@@ -240,6 +293,7 @@ export default function CompaniesPage() {
                       id="phone"
                       value={newCompany.phone}
                       onChange={(e) => setNewCompany({ ...newCompany, phone: e.target.value })}
+                      placeholder="Enter phone number"
                     />
                   </div>
                   <div className="space-y-2">
@@ -248,6 +302,7 @@ export default function CompaniesPage() {
                       id="address"
                       value={newCompany.address}
                       onChange={(e) => setNewCompany({ ...newCompany, address: e.target.value })}
+                      placeholder="Enter company address"
                     />
                   </div>
                   <div className="space-y-2">
@@ -257,15 +312,26 @@ export default function CompaniesPage() {
                       type="number"
                       min="0"
                       step="0.01"
-                      value={newCompany.price_per_item}
+                      value={newCompany.price_per_item || ""}
                       onChange={(e) =>
-                        setNewCompany({ ...newCompany, price_per_item: Number.parseFloat(e.target.value) || 0 })
+                        setNewCompany({
+                          ...newCompany,
+                          price_per_item: e.target.value ? Number.parseFloat(e.target.value) : 0,
+                        })
                       }
+                      placeholder="0.00"
                     />
                   </div>
                 </div>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setShowAddDialog(false)} disabled={isSubmitting}>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowAddDialog(false)
+                      resetForm()
+                    }}
+                    disabled={isSubmitting}
+                  >
                     Cancel
                   </Button>
                   <Button onClick={handleAddCompany} disabled={isSubmitting}>
@@ -286,7 +352,7 @@ export default function CompaniesPage() {
         <CardContent>
           <div className="space-y-4">
             <Input
-              placeholder="Search companies..."
+              placeholder="Search companies by name, contact person, or email..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="max-w-sm"
@@ -309,7 +375,9 @@ export default function CompaniesPage() {
                   {filteredCompanies.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                        No companies found. Add your first company to get started.
+                        {searchTerm
+                          ? "No companies found matching your search."
+                          : "No companies found. Add your first company to get started."}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -318,7 +386,7 @@ export default function CompaniesPage() {
                         <TableCell className="font-medium">{company.name}</TableCell>
                         <TableCell>{company.contact_person}</TableCell>
                         <TableCell>{company.email}</TableCell>
-                        <TableCell>{company.phone}</TableCell>
+                        <TableCell>{company.phone || "—"}</TableCell>
                         <TableCell>${company.price_per_item.toFixed(2)}</TableCell>
                         <TableCell>
                           <Badge
@@ -332,17 +400,29 @@ export default function CompaniesPage() {
                         <TableCell className="text-right space-x-2">
                           <Dialog>
                             <DialogTrigger asChild>
-                              <Button variant="ghost" size="icon" onClick={() => setEditingCompany(company)}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => {
+                                  setEditingCompany(company)
+                                  setFormError("")
+                                }}
+                              >
                                 <Pencil className="w-4 h-4" />
                               </Button>
                             </DialogTrigger>
-                            <DialogContent>
+                            <DialogContent className="max-w-md">
                               <DialogHeader>
                                 <DialogTitle>Edit Company</DialogTitle>
                                 <DialogDescription>Update company details and pricing.</DialogDescription>
                               </DialogHeader>
                               {editingCompany && (
                                 <div className="space-y-4 py-4">
+                                  {formError && (
+                                    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-md text-sm">
+                                      {formError}
+                                    </div>
+                                  )}
                                   <div className="space-y-2">
                                     <Label htmlFor="edit-name">Company Name</Label>
                                     <Input
@@ -430,7 +510,10 @@ export default function CompaniesPage() {
                               <DialogFooter>
                                 <Button
                                   variant="outline"
-                                  onClick={() => setEditingCompany(null)}
+                                  onClick={() => {
+                                    setEditingCompany(null)
+                                    setFormError("")
+                                  }}
                                   disabled={isSubmitting}
                                 >
                                   Cancel

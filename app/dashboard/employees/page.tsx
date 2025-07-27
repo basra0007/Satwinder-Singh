@@ -24,6 +24,7 @@ import DashboardLayout from "@/components/dashboard-layout"
 import { Badge } from "@/components/ui/badge"
 import { Plus, Pencil, Trash2, CalendarIcon, Loader2 } from "lucide-react"
 import { getStoredEmployees, addEmployee, updateEmployee, deleteEmployee, type Employee } from "@/lib/storage"
+import { isAuthenticated, getUserRole } from "@/lib/cookies"
 import { cn } from "@/lib/utils"
 
 export default function EmployeesPage() {
@@ -47,18 +48,19 @@ export default function EmployeesPage() {
   })
 
   useEffect(() => {
-    // In a real app, verify if user is admin
-    const authStatus = localStorage.getItem("isAuthenticated")
-    const userRole = localStorage.getItem("userRole")
-
-    if (authStatus !== "true") {
+    // Check authentication and admin role
+    if (!isAuthenticated()) {
       router.push("/login")
-    } else if (userRole !== "admin") {
-      router.push("/dashboard")
-    } else {
-      setIsAdmin(true)
+      return
     }
 
+    const userRole = getUserRole()
+    if (userRole !== "admin") {
+      router.push("/dashboard")
+      return
+    }
+
+    setIsAdmin(true)
     loadEmployees()
   }, [router])
 
@@ -69,47 +71,77 @@ export default function EmployeesPage() {
       setEmployees(storedEmployees)
     } catch (error) {
       console.error("Error loading employees:", error)
+      setFormError("Failed to load employees. Please refresh the page.")
     } finally {
       setIsLoading(false)
     }
   }
 
-  const validateForm = () => {
-    if (!newEmployee.name.trim()) {
+  const resetForm = () => {
+    setNewEmployee({
+      name: "",
+      email: "",
+      phone: "",
+      role: "staff",
+      status: "active",
+      start_date: new Date().toISOString().split("T")[0],
+    })
+    setFormError("")
+  }
+
+  const validateForm = (employee: typeof newEmployee) => {
+    if (!employee.name.trim()) {
       setFormError("Employee name is required")
       return false
     }
-    if (!newEmployee.email.trim()) {
+    if (!employee.email.trim()) {
       setFormError("Email is required")
       return false
     }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(employee.email)) {
+      setFormError("Please enter a valid email address")
+      return false
+    }
+
+    // Check for duplicate email (excluding current employee when editing)
+    const existingEmployee = employees.find(
+      (emp) =>
+        emp.email.toLowerCase() === employee.email.toLowerCase() && (!editingEmployee || emp.id !== editingEmployee.id),
+    )
+    if (existingEmployee) {
+      setFormError("An employee with this email already exists")
+      return false
+    }
+
+    if (!employee.start_date) {
+      setFormError("Start date is required")
+      return false
+    }
+
     setFormError("")
     return true
   }
 
   const handleAddEmployee = async () => {
-    if (!validateForm()) return
+    if (!validateForm(newEmployee)) return
 
     setIsSubmitting(true)
     try {
       const result = await addEmployee(newEmployee)
       if (result) {
         setEmployees([result, ...employees])
-        setNewEmployee({
-          name: "",
-          email: "",
-          phone: "",
-          role: "staff",
-          status: "active",
-          start_date: new Date().toISOString().split("T")[0],
-        })
+        resetForm()
         setShowAddDialog(false)
+        console.log("Employee added successfully:", result)
       } else {
         setFormError("Failed to add employee. Please try again.")
       }
     } catch (error) {
       console.error("Error adding employee:", error)
-      setFormError("An error occurred while adding the employee.")
+      setFormError("An error occurred while adding the employee. Please try again.")
     } finally {
       setIsSubmitting(false)
     }
@@ -117,6 +149,7 @@ export default function EmployeesPage() {
 
   const handleUpdateEmployee = async () => {
     if (!editingEmployee) return
+    if (!validateForm(editingEmployee)) return
 
     setIsSubmitting(true)
     try {
@@ -124,24 +157,31 @@ export default function EmployeesPage() {
       if (result) {
         setEmployees(employees.map((emp) => (emp.id === editingEmployee.id ? result : emp)))
         setEditingEmployee(null)
+        setFormError("")
+      } else {
+        setFormError("Failed to update employee. Please try again.")
       }
     } catch (error) {
       console.error("Error updating employee:", error)
+      setFormError("An error occurred while updating the employee.")
     } finally {
       setIsSubmitting(false)
     }
   }
 
   const handleDeleteEmployee = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this employee?")) return
+    if (!confirm("Are you sure you want to delete this employee? This action cannot be undone.")) return
 
     try {
       const success = await deleteEmployee(id)
       if (success) {
         setEmployees(employees.filter((emp) => emp.id !== id))
+      } else {
+        alert("Failed to delete employee. Please try again.")
       }
     } catch (error) {
       console.error("Error deleting employee:", error)
+      alert("An error occurred while deleting the employee.")
     }
   }
 
@@ -160,17 +200,20 @@ export default function EmployeesPage() {
   const filteredEmployees = employees.filter(
     (emp) =>
       emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      emp.email.toLowerCase().includes(searchTerm.toLowerCase()),
+      emp.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      emp.role.toLowerCase().includes(searchTerm.toLowerCase()),
   )
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="flex items-center gap-2">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <p>Loading employees...</p>
+      <DashboardLayout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <p>Loading employees...</p>
+          </div>
         </div>
-      </div>
+      </DashboardLayout>
     )
   }
 
@@ -187,14 +230,22 @@ export default function EmployeesPage() {
               <CardTitle>Employees</CardTitle>
               <CardDescription>Manage your company employees here.</CardDescription>
             </div>
-            <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+            <Dialog
+              open={showAddDialog}
+              onOpenChange={(open) => {
+                setShowAddDialog(open)
+                if (!open) {
+                  resetForm()
+                }
+              }}
+            >
               <DialogTrigger asChild>
                 <Button>
                   <Plus className="w-4 h-4 mr-2" />
                   Add Employee
                 </Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="max-w-md">
                 <DialogHeader>
                   <DialogTitle>Add New Employee</DialogTitle>
                   <DialogDescription>Enter the details of the new employee below.</DialogDescription>
@@ -211,6 +262,7 @@ export default function EmployeesPage() {
                       id="name"
                       value={newEmployee.name}
                       onChange={(e) => setNewEmployee({ ...newEmployee, name: e.target.value })}
+                      placeholder="Enter full name"
                       required
                     />
                   </div>
@@ -221,6 +273,7 @@ export default function EmployeesPage() {
                       type="email"
                       value={newEmployee.email}
                       onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })}
+                      placeholder="Enter email address"
                       required
                     />
                   </div>
@@ -230,10 +283,11 @@ export default function EmployeesPage() {
                       id="phone"
                       value={newEmployee.phone}
                       onChange={(e) => setNewEmployee({ ...newEmployee, phone: e.target.value })}
+                      placeholder="Enter phone number"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Start Date</Label>
+                    <Label>Start Date *</Label>
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button
@@ -261,6 +315,7 @@ export default function EmployeesPage() {
                               start_date: date?.toISOString().split("T")[0] || new Date().toISOString().split("T")[0],
                             })
                           }
+                          disabled={(date) => date > new Date()}
                           initialFocus
                         />
                       </PopoverContent>
@@ -286,7 +341,14 @@ export default function EmployeesPage() {
                   </div>
                 </div>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setShowAddDialog(false)} disabled={isSubmitting}>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowAddDialog(false)
+                      resetForm()
+                    }}
+                    disabled={isSubmitting}
+                  >
                     Cancel
                   </Button>
                   <Button onClick={handleAddEmployee} disabled={isSubmitting}>
@@ -307,7 +369,7 @@ export default function EmployeesPage() {
         <CardContent>
           <div className="space-y-4">
             <Input
-              placeholder="Search employees..."
+              placeholder="Search employees by name, email, or role..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="max-w-sm"
@@ -330,7 +392,9 @@ export default function EmployeesPage() {
                   {filteredEmployees.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                        No employees found. Add your first employee to get started.
+                        {searchTerm
+                          ? "No employees found matching your search."
+                          : "No employees found. Add your first employee to get started."}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -338,7 +402,7 @@ export default function EmployeesPage() {
                       <TableRow key={employee.id}>
                         <TableCell className="font-medium">{employee.name}</TableCell>
                         <TableCell>{employee.email}</TableCell>
-                        <TableCell>{employee.phone}</TableCell>
+                        <TableCell>{employee.phone || "—"}</TableCell>
                         <TableCell>{format(new Date(employee.start_date), "MMM d, yyyy")}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className="capitalize">
@@ -357,17 +421,29 @@ export default function EmployeesPage() {
                         <TableCell className="text-right space-x-2">
                           <Dialog>
                             <DialogTrigger asChild>
-                              <Button variant="ghost" size="icon" onClick={() => setEditingEmployee(employee)}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => {
+                                  setEditingEmployee(employee)
+                                  setFormError("")
+                                }}
+                              >
                                 <Pencil className="w-4 h-4" />
                               </Button>
                             </DialogTrigger>
-                            <DialogContent>
+                            <DialogContent className="max-w-md">
                               <DialogHeader>
                                 <DialogTitle>Edit Employee</DialogTitle>
                                 <DialogDescription>Update employee details.</DialogDescription>
                               </DialogHeader>
                               {editingEmployee && (
                                 <div className="space-y-4 py-4">
+                                  {formError && (
+                                    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-md text-sm">
+                                      {formError}
+                                    </div>
+                                  )}
                                   <div className="space-y-2">
                                     <Label htmlFor="edit-name">Full Name</Label>
                                     <Input
@@ -439,6 +515,7 @@ export default function EmployeesPage() {
                                                 new Date().toISOString().split("T")[0],
                                             })
                                           }
+                                          disabled={(date) => date > new Date()}
                                           initialFocus
                                         />
                                       </PopoverContent>
@@ -467,7 +544,10 @@ export default function EmployeesPage() {
                               <DialogFooter>
                                 <Button
                                   variant="outline"
-                                  onClick={() => setEditingEmployee(null)}
+                                  onClick={() => {
+                                    setEditingEmployee(null)
+                                    setFormError("")
+                                  }}
                                   disabled={isSubmitting}
                                 >
                                   Cancel
