@@ -17,7 +17,7 @@ export const metadata: Metadata = {
     statusBarStyle: "default",
     title: "Traditional Kitchen",
   },
-    generator: 'v0.dev'
+    generator: 'v0.app'
 }
 
 export default function RootLayout({

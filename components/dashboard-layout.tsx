@@ -6,7 +6,7 @@ import Image from "next/image"
 import { usePathname, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
-import { Home, ShoppingBag, Users, Settings, Menu, LogOut, Building2, BarChart } from "lucide-react"
+import { Home, ShoppingBag, Users, Settings, Menu, LogOut, Building2, BarChart, Activity } from "lucide-react"
 import { clearAuth } from "@/lib/auth"
 import { getUserRole } from "@/lib/cookies"
 
@@ -45,6 +45,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     { name: "Companies", href: "/dashboard/companies", icon: Building2, roles: ["admin"] },
     { name: "Employees", href: "/dashboard/employees", icon: Users, roles: ["admin"] },
     { name: "Settings", href: "/dashboard/settings", icon: Settings, roles: ["admin"] },
+    { name: "Diagnostics", href: "/dashboard/diagnostics", icon: Activity, roles: ["admin"] },
   ].filter((item) => item.roles.includes(userRole as string))
 
   return (
@@ -82,7 +83,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               })}
             </nav>
             <div className="p-4">
-              <Button variant="outline" className="w-full justify-start" onClick={handleLogout}>
+              <Button variant="outline" className="w-full justify-start bg-transparent" onClick={handleLogout}>
                 <LogOut className="mr-3 h-5 w-5" />
                 Logout
               </Button>
@@ -131,7 +132,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               })}
             </nav>
             <div className="p-4 border-t">
-              <Button variant="outline" className="w-full justify-start" onClick={handleLogout}>
+              <Button variant="outline" className="w-full justify-start bg-transparent" onClick={handleLogout}>
                 <LogOut className="mr-3 h-5 w-5" />
                 Logout
               </Button>
